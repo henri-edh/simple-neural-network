@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# uv
+.venv/
+uv.lock
+
+# Data
+.mnist_data/
+
+# OS
+.DS_Store
+Thumbs.db
