@@ -147,6 +147,99 @@ class NeuralNetwork:
             a = self.sigmoid(z)
         return a
 
+    def predict_verbose(self, x: np.ndarray) -> np.ndarray:
+        """
+        Forward pass with detailed printouts of every internal matrix
+        transformation — shows what happens step-by-step inside the network
+        when identifying a digit.
+        """
+        if x.ndim == 1:
+            x = x.reshape(1, -1)
+
+        print("\n" + "=" * 70)
+        print("  DIGIT IDENTIFICATION — Internal Matrix Trace")
+        print("=" * 70)
+
+        # ── Layer 0: Input ──
+        print(f"\n  [LAYER 0]  Input (flattened 28×28 pixels)")
+        print(f"    Shape:        {x.shape}")
+        print(f"    Value range:  [{x.min():.4f}, {x.max():.4f}]")
+        print(f"    Non-zero:     {np.count_nonzero(x)} / {x.size} pixels")
+        # Show a mini text-based heatmap of the 28x28 digit
+        img_2d = x.reshape(28, 28)
+        print(f"    Digit preview (28×28, █ = pixel > 0.5):")
+        for row in img_2d:
+            line = "      " + "".join("██" if p > 0.3 else "░░" if p > 0.01 else "  " for p in row)
+            print(line)
+
+        a = x
+
+        for l, (w, b) in enumerate(zip(self.weights, self.biases), start=1):
+            # ── Pre-activation (weighted sum + bias) ──
+            z = np.dot(a, w) + b
+
+            # ── Post-activation (sigmoid squash) ──
+            a_next = self.sigmoid(z)
+
+            layer_type = "OUTPUT" if l == self.num_layers else f"HIDDEN {l}"
+            print(f"\n  {'─' * 66}")
+            print(f"  [LAYER {l}]  {layer_type}  ({w.shape[0]} → {w.shape[1]} neurons)")
+            print(f"  {'─' * 66}")
+
+            # Weight matrix summary
+            print(f"    WEIGHTS  W[{l}]")
+            print(f"      Shape:         {w.shape}")
+            print(f"      Min / Max:     {w.min():+.4f} / {w.max():+.4f}")
+            print(f"      Mean / Std:    {w.mean():+.4f} / {w.std():.4f}")
+
+            # Bias vector summary
+            print(f"    BIASES   b[{l}]")
+            print(f"      Shape:         {b.shape}")
+            print(f"      Min / Max:     {b.min():+.4f} / {b.max():+.4f}")
+
+            # Pre-activation z
+            print(f"    PRE-ACTIVATION  z[{l}]  (W·a + b, before sigmoid)")
+            print(f"      Shape:         {z.shape}")
+            print(f"      Min / Max:     {z.min():+.4f} / {z.max():+.4f}")
+            if z.shape[1] <= 64:
+                z_flat = z.flatten()
+                # Show top 5 largest activations
+                top_idx = np.argsort(z_flat)[-5:][::-1]
+                print(f"      Top-5 neurons (most excited):")
+                for rank, idx in enumerate(top_idx, 1):
+                    bar = "█" * min(30, int(abs(z_flat[idx]) * 5))
+                    print(f"        #{rank:2d}  neuron {idx:4d}  →  {z_flat[idx]:+.4f}  {bar}")
+            else:
+                print(f"      (layer too wide to show individual neurons)")
+
+            # Post-activation a
+            print(f"    POST-ACTIVATION a[{l}]  (after sigmoid squash → [0, 1])")
+            print(f"      Shape:         {a_next.shape}")
+            print(f"      Min / Max:     {a_next.min():.4f} / {a_next.max():.4f}")
+            if a_next.shape[1] == 10:
+                # Output layer — show all 10 digits with confidence bars
+                probs = a_next.flatten()
+                print(f"      Digit confidence scores:")
+                for digit, prob in enumerate(probs):
+                    bar_len = int(prob * 40)
+                    bar = "█" * bar_len + "░" * (40 - bar_len)
+                    marker = " ◀━━ PREDICTION" if digit == np.argmax(probs) else ""
+                    print(f"        {digit}: {bar} {prob:.4f}{marker}")
+            elif a_next.shape[1] <= 64:
+                a_flat = a_next.flatten()
+                print(f"      Active neurons (a > 0.5): {np.sum(a_flat > 0.5)}")
+                print(f"      Inactive neurons (a < 0.1): {np.sum(a_flat < 0.1)}")
+
+            a = a_next
+
+        print(f"\n  {'═' * 66}")
+        predicted = np.argmax(a.flatten())
+        confidence = a.flatten()[predicted]
+        print(f"  ★  FINAL PREDICTION:  {predicted}  (confidence: {confidence:.4f})")
+        print(f"  {'═' * 66}\n")
+
+        return a
+
     def train_step(self, x_batch: np.ndarray, y_batch: np.ndarray,
                    lr: float) -> float:
         """
@@ -316,6 +409,102 @@ class NeuralNetwork:
 
 
 # ──────────────────────────────────────────────────────────────────────
+#  Bitmap digit loader
+# ──────────────────────────────────────────────────────────────────────
+
+def load_bitmap_digit(filepath: str, threshold: float = 0.5,
+                      invert: bool | None = None) -> np.ndarray:
+    """
+    Load a bitmap image of a hand-drawn digit and convert it to a
+    28×28 flattened array of 0/1 values ready for the neural network.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to a PNG, JPG, BMP, or any image matplotlib can read.
+    threshold : float
+        Pixel intensity threshold (0–1) to binarise the image.
+        Pixels above this become 1 ("ink"), below become 0 ("paper").
+    invert : bool or None
+        If True, assume dark digit on light background and invert.
+        If None, auto-detect based on which side has more dark pixels.
+
+    Returns
+    -------
+    digit : (784,) ndarray of 0.0 / 1.0
+    """
+    import matplotlib.image as mpimg
+
+    print(f"\n  Loading bitmap: {filepath}")
+
+    # Read the image
+    img = mpimg.imread(filepath)
+    print(f"    Original shape:  {img.shape}")
+
+    # Convert RGBA / RGB to grayscale
+    if img.ndim == 3:
+        if img.shape[2] == 4:
+            # RGBA — composite over white background
+            alpha = img[:, :, 3:4]
+            rgb = img[:, :, :3]
+            img = rgb * alpha + (1 - alpha)  # blend with white
+        # RGB → grayscale using luminance weights
+        img = 0.2989 * img[:, :, 0] + 0.5870 * img[:, :, 1] + 0.1140 * img[:, :, 2]
+
+    # Ensure values are in [0, 1]
+    if img.max() > 1.0:
+        img = img / 255.0
+
+    print(f"    Grayscale range: [{img.min():.2f}, {img.max():.2f}]")
+
+    # Resize to 28×28 using numpy slicing / interpolation
+    # We use a simple block-average resize
+    h, w = img.shape
+    img_resized = np.zeros((28, 28))
+    for i in range(28):
+        for j in range(28):
+            i_start = int(i * h / 28)
+            i_end = int((i + 1) * h / 28)
+            j_start = int(j * w / 28)
+            j_end = int((j + 1) * w / 28)
+            block = img[i_start:max(i_start + 1, i_end),
+                       j_start:max(j_start + 1, j_end)]
+            img_resized[i, j] = np.mean(block)
+
+    print(f"    Resized to:      {img_resized.shape}")
+
+    # Auto-detect inversion: MNIST uses white digits (1.0) on black (0.0)
+    if invert is None:
+        # If more than half the border is dark, we're probably dark-bg
+        border_pixels = np.concatenate([
+            img_resized[0, :], img_resized[-1, :],
+            img_resized[1:-1, 0], img_resized[1:-1, -1],
+        ])
+        dark_bg = np.mean(border_pixels) < 0.5
+        if dark_bg:
+            # Already dark background → leave as-is (digit is bright)
+            print(f"    Auto-detect:     dark background — no inversion needed")
+        else:
+            img_resized = 1.0 - img_resized
+            print(f"    Auto-detect:     light background → INVERTED")
+    elif invert:
+        img_resized = 1.0 - img_resized
+        print(f"    Manually inverted (dark digit → white digit)")
+
+    # Threshold to binary
+    digit = (img_resized > threshold).astype(np.float64)
+    print(f"    Threshold:       {threshold}  (non-zero pixels: {np.count_nonzero(digit)})")
+
+    # Show the processed digit as ASCII art
+    print(f"    Processed digit (28×28, █ = 1, · = 0):")
+    for row in digit:
+        line = "      " + "".join("██" if p > 0 else "··" for p in row)
+        print(line)
+
+    return digit.flatten()
+
+
+# ──────────────────────────────────────────────────────────────────────
 #  Main
 # ──────────────────────────────────────────────────────────────────────
 
@@ -356,22 +545,71 @@ if __name__ == "__main__":
     print(f"  Final test accuracy: {test_acc:.4f}  ({test_acc*100:.1f}%)")
     print("=" * 60)
 
+    # ── Run a verbose trace on one test sample ──
+    print()
+    print("=" * 60)
+    print("  Verbose prediction trace (test sample 0):")
+    print("=" * 60)
+    sample_idx = 0
+    nn.predict_verbose(X_test[sample_idx])
+    print(f"  Actual label: {y_test[sample_idx]}")
+
     # Interactive prediction
     print()
-    print("Try your own digit! Enter 28 lines of 28 space-separated pixel values")
-    print("(0.0–1.0), or press Enter to skip.")
+    print("=" * 60)
+    print("  Try your own digit!")
+    print("=" * 60)
+    print("  Options:")
+    print("    [1] Enter 28 rows of pixel values manually")
+    print("    [2] Load a bitmap image (PNG, JPG, BMP) of a hand-drawn digit")
+    print("    [Enter] Quit")
+
     try:
-        choice = input("Enter 'y' to input a custom digit, or Enter to quit: ").strip()
-        if choice.lower() == "y":
-            print("Enter 28 rows of 28 pixel values (0.0 = white, 1.0 = black):")
+        choice = input("\n  Choose [1/2/Enter]: ").strip()
+
+        if choice == "1":
+            print("\n  Enter 28 rows of 28 pixel values (0.0 = black bg, 1.0 = white digit):")
+            print("  (Remember: MNIST uses white digits on black background!)")
             rows = []
             for i in range(28):
-                row_str = input(f"  row {i:2d}: ").strip()
+                row_str = input(f"    row {i:2d}: ").strip()
                 rows.append([float(v) for v in row_str.split()])
             custom = np.array(rows).reshape(1, 784)
-            pred = nn.predict(custom)
-            print(f"  Prediction: digit {np.argmax(pred)}")
-            print(f"  Confidence scores: {pred.flatten().round(4)}")
+            nn.predict_verbose(custom)
+
+        elif choice == "2":
+            filepath = input("\n  Path to bitmap file: ").strip()
+            if filepath and os.path.isfile(filepath):
+                print("\n  Preprocessing bitmap...")
+                digit = load_bitmap_digit(filepath, threshold=0.5)
+
+                # Show the processed image using matplotlib too
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 4))
+                ax1.imshow(digit.reshape(28, 28), cmap="gray_r", interpolation="nearest")
+                ax1.set_title("Processed Digit (28×28 binary)", fontweight="bold")
+                ax1.axis("off")
+
+                # Predict and show bar chart
+                pred = nn.predict_verbose(digit)
+                probs = pred.flatten()
+                ax2.bar(range(10), probs, color=["C3" if i == np.argmax(probs) else "C0" for i in range(10)])
+                ax2.set_title(f"Prediction: {np.argmax(probs)} (confidence: {probs[np.argmax(probs)]:.3f})", fontweight="bold")
+                ax2.set_xlabel("Digit")
+                ax2.set_ylabel("Confidence")
+                ax2.set_xticks(range(10))
+                ax2.set_ylim(0, 1.05)
+                ax2.grid(axis="y", alpha=0.3)
+
+                fig.tight_layout()
+                plt.show(block=False)
+                input("\n  Press Enter to continue...")
+            else:
+                print(f"  File not found: {filepath}")
+
+        else:
+            print()
+            print("  Goodbye!")
+
     except (EOFError, KeyboardInterrupt):
         print()
         print("Goodbye!")

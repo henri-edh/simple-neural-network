@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neural Network — 3D Information Flow</title>
+<style>
+  :root {
+    --bg: #0a0a14;
+    --panel-bg: rgba(10, 10, 30, 0.9);
+    --text: #e0e0f0;
+    --accent: #64ffda;
+    --accent2: #ff6e6e;
+    --border: rgba(255, 255, 255, 0.08);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    overflow: hidden;
+    color: var(--text);
+  }
+  #canvas-container {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+  }
+  canvas { display: block; }
+
+  /* ── Top bar ── */
+  #topbar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 24px;
+    background: linear-gradient(180deg, rgba(10,10,30,0.95) 0%, rgba(10,10,30,0.6) 100%);
+    border-bottom: 1px solid var(--border);
+    pointer-events: none;
+  }
+  #topbar > * { pointer-events: auto; }
+  #title {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+  }
+  #title span { color: var(--text); font-weight: 400; opacity: 0.6; }
+
+  /* ── Bottom control panel ── */
+  #panel {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    backdrop-filter: blur(16px);
+  }
+  button {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  button:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.2); }
+  button.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+  button.warn  { background: rgba(255,110,110,0.15); }
+
+  #sample-info {
+    font-size: 13px;
+    opacity: 0.8;
+    min-width: 140px;
+    text-align: center;
+  }
+  #sample-info .label { color: var(--accent); font-weight: 600; }
+  #sample-info .pred  { color: var(--accent2); }
+  #sample-info .correct { color: #64ff64; }
+
+  /* Layer toggle row */
+  #layer-toggles {
+    display: flex;
+    gap: 8px;
+    padding: 0 8px;
+    border-left: 1px solid var(--border);
+    margin-left: 4px;
+  }
+  #layer-toggles label {
+    font-size: 11px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+  }
+  #layer-toggles label:hover { opacity: 1; }
+  #layer-toggles input { accent-color: var(--accent); }
+
+  /* Speed slider */
+  #speed-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    opacity: 0.7;
+    border-left: 1px solid var(--border);
+    padding-left: 12px;
+  }
+  #speed {
+    width: 70px;
+    accent-color: var(--accent);
+  }
+
+  /* Loading overlay */
+  #loading {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    transition: opacity 0.6s;
+  }
+  #loading.hidden { opacity: 0; pointer-events: none; }
+  #loading .spinner {
+    width: 40px; height: 40px;
+    border: 3px solid rgba(255,255,255,0.1);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 16px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading p { font-size: 13px; opacity: 0.6; }
+
+  /* Key hint */
+  #keyhint {
+    position: fixed;
+    bottom: 120px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    font-size: 11px;
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    #panel { gap: 6px; padding: 10px 14px; border-radius: 10px; }
+    button { padding: 6px 10px; font-size: 11px; }
+    #layer-toggles { display: none; }
+    #sample-info { min-width: auto; font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+
+<div id="topbar">
+  <div id="title">DIGIT CLASSIFIER <span>· 784 → 128 → 64 → 10</span></div>
+</div>
+
+<div id="panel">
+  <button id="btn-prev" title="Previous sample">◀</button>
+  <div id="sample-info">
+    Sample <span id="sample-idx">0</span><br>
+    <span>Label: </span><span class="label" id="sample-label">-</span>
+    &nbsp;Pred: <span class="pred" id="sample-pred">-</span>
+  </div>
+  <button id="btn-next" title="Next sample">▶</button>
+  <button id="btn-play" title="Auto-play through samples">▶▶ Auto</button>
+  <button id="btn-reset-cam" title="Reset camera view">📷 Reset</button>
+
+  <div id="layer-toggles">
+    <label><input type="checkbox" id="toggle-input" checked> Input</label>
+    <label><input type="checkbox" id="toggle-h1" checked> H1</label>
+    <label><input type="checkbox" id="toggle-h2" checked> H2</label>
+    <label><input type="checkbox" id="toggle-out" checked> Out</label>
+  </div>
+
+  <div id="speed-group">
+    <span>Flow</span>
+    <input type="range" id="speed" min="0" max="200" value="100">
+  </div>
+</div>
+
+<canvas id="digit-preview" width="28" height="28"></canvas>
+
+<div id="keyhint">🖱 Drag to rotate &nbsp;·&nbsp; Scroll to zoom &nbsp;·&nbsp; Right-drag to pan &nbsp;·&nbsp; ← → keys to change sample &nbsp;·&nbsp; Space to auto-play</div>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <p>Loading network data...</p>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ──────────────────────────────────────────────────────────
+//  Globals
+// ──────────────────────────────────────────────────────────
+const container = document.getElementById('canvas-container');
+const NUM_PARTICLES_PER_TRANSITION = 600;
+const LAYER_NAMES = ['Input 28×28', 'Hidden₁ 128', 'Hidden₂ 64', 'Output 10'];
+const LAYER_SIZES = [784, 128, 64, 10];
+
+let networkData = null;        // JSON from Python
+let currentSampleIdx = 0;
+let autoPlay = false;
+let autoPlayTimer = null;
+let flowSpeed = 1.0;
+
+// Three.js objects
+let scene, camera, renderer, controls;
+let layerGroups = [];          // Group per layer (neurons)
+let particleSystems = [];      // Particle systems for each transition
+let connectionLines = [];      // Optional: weight lines
+
+// ──────────────────────────────────────────────────────────
+//  Scene setup
+// ──────────────────────────────────────────────────────────
+function initScene() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color('#0a0a14');
+  scene.fog = new THREE.Fog('#0a0a14', 40, 120);
+
+  camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.5, 200);
+  camera.position.set(30, 20, 45);
+  camera.lookAt(15, 15, 18);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.2;
+  container.appendChild(renderer.domElement);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(15, 12, 18);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 10;
+  controls.maxDistance = 100;
+  controls.maxPolarAngle = Math.PI * 0.75;
+  controls.update();
+
+  // ── Lighting ──
+  const ambient = new THREE.AmbientLight('#334466', 1.5);
+  scene.add(ambient);
+
+  const keyLight = new THREE.DirectionalLight('#ffffff', 3);
+  keyLight.position.set(20, 40, 30);
+  keyLight.castShadow = true;
+  keyLight.shadow.mapSize.set(1024, 1024);
+  keyLight.shadow.camera.near = 0.5;
+  keyLight.shadow.camera.far = 120;
+  keyLight.shadow.camera.left = -40;
+  keyLight.shadow.camera.right = 40;
+  keyLight.shadow.camera.top = 40;
+  keyLight.shadow.camera.bottom = -40;
+  scene.add(keyLight);
+
+  const fillLight = new THREE.DirectionalLight('#8899cc', 1);
+  fillLight.position.set(-10, 5, -15);
+  scene.add(fillLight);
+
+  const rimLight = new THREE.DirectionalLight('#4466aa', 2);
+  rimLight.position.set(0, -2, 40);
+  scene.add(rimLight);
+
+  // ── Grid floor ──
+  const grid = new THREE.PolarGridHelper(35, 40, 20, 128, '#1a1a3a', '#1a1a3a');
+  grid.position.y = -8;
+  scene.add(grid);
+
+  // ── Layer label planes (floating text would need canvas textures, skip for now) ──
+
+  window.addEventListener('resize', () => {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+  });
+}
+
+// ──────────────────────────────────────────────────────────
+//  Build neurons for a layer
+// ──────────────────────────────────────────────────────────
+function createLayerNeurons(layerIdx, totalLayers) {
+  const group = new THREE.Group();
+  group.name = `layer-${layerIdx}`;
+  const n = LAYER_SIZES[layerIdx];
+
+  // Determine layout based on layer type
+  let positions = [];
+
+  if (layerIdx === 0) {
+    // Input: 28×28 grid on XZ plane, centered at (14, 0, 0), facing camera
+    for (let row = 0; row < 28; row++) {
+      for (let col = 0; col < 28; col++) {
+        const x = col - 13.5;
+        const y = 13.5 - row;
+        positions.push({ x, y, z: 0 });
+      }
+    }
+  } else if (layerIdx < totalLayers - 1) {
+    // Hidden layers: arrange in a grid on vertical plane
+    const cols = layerIdx === 1 ? 16 : 8;
+    const rows = Math.ceil(n / cols);
+    const z = layerIdx * 14;
+    const spacingX = layerIdx === 1 ? 1.8 : 2.4;
+    const spacingY = layerIdx === 1 ? 1.8 : 2.4;
+    for (let i = 0; i < n; i++) {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = (col - (cols - 1) / 2) * spacingX;
+      const y = (row - (rows - 1) / 2) * spacingY;
+      positions.push({ x, y, z });
+    }
+  } else {
+    // Output: 10 neurons in a row
+    const z = layerIdx * 14;
+    for (let i = 0; i < 10; i++) {
+      positions.push({ x: (i - 4.5) * 2.4, y: 0, z });
+    }
+  }
+
+  // Create neuron geometry (shared)
+  const geom = layerIdx === 0
+    ? new THREE.BoxGeometry(0.85, 0.85, 0.35)  // input: small cubes
+    : layerIdx === totalLayers - 1
+      ? new THREE.SphereGeometry(0.9, 24, 24)   // output: larger spheres
+      : new THREE.SphereGeometry(0.5, 16, 16);  // hidden: medium spheres
+
+  const neurons = [];
+  positions.forEach((pos, i) => {
+    const mat = new THREE.MeshStandardMaterial({
+      color: '#1a1a3a',
+      roughness: 0.4,
+      metalness: 0.2,
+      emissive: '#000022',
+      emissiveIntensity: 0.2,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.set(pos.x, pos.y, pos.z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData = { neuronIndex: i, baseColor: '#1a1a3a' };
+    group.add(mesh);
+    neurons.push(mesh);
+  });
+
+  return { group, neurons };
+}
+
+// ──────────────────────────────────────────────────────────
+//  Particle systems for information flow
+// ──────────────────────────────────────────────────────────
+function createParticleSystem(fromGroup, toGroup, fromSize, toSize) {
+  const count = NUM_PARTICLES_PER_TRANSITION;
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const phases = new Float32Array(count);       // random phase 0..1
+  const srcIdx = new Uint16Array(count);         // which source neuron
+  const dstIdx = new Uint16Array(count);         // which dest neuron
+
+  // Pick random source→dest pairs (uniform for now; will bias by activation in update)
+  for (let i = 0; i < count; i++) {
+    srcIdx[i] = Math.floor(Math.random() * fromSize);
+    dstIdx[i] = Math.floor(Math.random() * toSize);
+    phases[i] = Math.random();
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  // Glowing point sprite texture
+  const canvas = document.createElement('canvas');
+  canvas.width = 32; canvas.height = 32;
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  gradient.addColorStop(0, 'rgba(180, 220, 255, 1)');
+  gradient.addColorStop(0.2, 'rgba(100, 180, 255, 0.8)');
+  gradient.addColorStop(0.5, 'rgba(40, 80, 200, 0.3)');
+  gradient.addColorStop(1, 'rgba(0, 0, 50, 0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 32, 32);
+  const sprite = new THREE.CanvasTexture(canvas);
+
+  const mat = new THREE.PointsMaterial({
+    size: 0.35,
+    map: sprite,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    transparent: true,
+    vertexColors: true,
+  });
+
+  const points = new THREE.Points(geom, mat);
+  points.userData = { phases, srcIdx, dstIdx, fromGroup, toGroup };
+
+  return points;
+}
+
+function updateParticles(system, fromActivations, toActivations, delta) {
+  const { phases, srcIdx, dstIdx, fromGroup, toGroup } = system.userData;
+  const positions = system.geometry.attributes.position.array;
+  const colors = system.geometry.attributes.color.array;
+  const count = phases.length;
+
+  for (let i = 0; i < count; i++) {
+    // Advance phase
+    phases[i] += delta * flowSpeed * 0.15;
+    if (phases[i] > 1.0) {
+      phases[i] -= 1.0;
+      // Optionally rewire to biased src/dst
+    }
+
+    const t = phases[i];
+    const si = srcIdx[i];
+    const di = dstIdx[i];
+
+    // Get positions
+    const srcObj = fromGroup.children[si];
+    const dstObj = toGroup.children[di];
+    if (!srcObj || !dstObj) continue;
+
+    const sx = srcObj.position.x;
+    const sy = srcObj.position.y;
+    const sz = srcObj.position.z;
+    const dx = dstObj.position.x;
+    const dy = dstObj.position.y;
+    const dz = dstObj.position.z;
+
+    // Quadratic bezier with an arch
+    const mx = (sx + dx) / 2;
+    const my = (sy + dy) / 2 + 3.0;
+    const mz = (sz + dz) / 2;
+
+    const u = 1 - t;
+    positions[i * 3]     = u * u * sx + 2 * u * t * mx + t * t * dx;
+    positions[i * 3 + 1] = u * u * sy + 2 * u * t * my + t * t * dy;
+    positions[i * 3 + 2] = u * u * sz + 2 * u * t * mz + t * t * dz;
+
+    // Color: blend source activation color toward dest
+    const aSrc = fromActivations[si] || 0;
+    const aDst = toActivations[di] || 0;
+    const a = aSrc * (1 - t) + aDst * t;
+    // Map activation to color: low=blue, high=yellow/white
+    const r = 0.15 + a * 0.85;
+    const g = 0.2 + a * 0.7;
+    const b = 0.9 - a * 0.6;
+    colors[i * 3]     = r;
+    colors[i * 3 + 1] = g;
+    colors[i * 3 + 2] = b;
+  }
+
+  system.geometry.attributes.position.needsUpdate = true;
+  system.geometry.attributes.color.needsUpdate = true;
+}
+
+// ──────────────────────────────────────────────────────────
+//  Build the full network geometry
+// ──────────────────────────────────────────────────────────
+function buildNetwork() {
+  const totalLayers = LAYER_SIZES.length;
+
+  // Clear existing
+  layerGroups.forEach(g => scene.remove(g.group));
+  particleSystems.forEach(p => scene.remove(p));
+  connectionLines.forEach(l => scene.remove(l));
+  layerGroups = [];
+  particleSystems = [];
+  connectionLines = [];
+
+  // Create layer neuron groups
+  for (let i = 0; i < totalLayers; i++) {
+    const { group, neurons } = createLayerNeurons(i, totalLayers);
+    scene.add(group);
+    layerGroups.push({ group, neurons, index: i });
+  }
+
+  // Create particle systems for transitions
+  for (let i = 0; i < totalLayers - 1; i++) {
+    const fromGroup = layerGroups[i].group;
+    const toGroup = layerGroups[i + 1].group;
+    const system = createParticleSystem(fromGroup, toGroup, LAYER_SIZES[i], LAYER_SIZES[i + 1]);
+    scene.add(system);
+    particleSystems.push(system);
+  }
+
+  // ── Layer label sprites ──
+  const labelZ = [0, 14, 28, 42];
+  const labelTexts = ['INPUT\n28×28', 'HIDDEN₁\n128', 'HIDDEN₂\n64', 'OUTPUT\n10'];
+  labelTexts.forEach((text, i) => {
+    const sprite = makeLabelSprite(text, i === 0 || i === 3 ? '#64ffda' : '#88aacc');
+    sprite.position.set(15, 16, labelZ[i]);
+    sprite.scale.set(6, 3, 1);
+    scene.add(sprite);
+  });
+}
+
+function makeLabelSprite(text, color) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = color;
+  ctx.font = 'bold 28px "SF Mono", "Fira Code", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const lines = text.split('\n');
+  lines.forEach((line, i) => {
+    ctx.fillText(line, 128, 40 + i * 30);
+  });
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  return new THREE.Sprite(mat);
+}
+
+// ──────────────────────────────────────────────────────────
+//  Update neuron colors from activation data
+// ──────────────────────────────────────────────────────────
+function updateActivations(sampleData) {
+  if (!sampleData || !sampleData.layers) {
+    console.warn('No sample layer data');
+    return;
+  }
+
+  // Map: layer index → activation values array
+  // layers array: [a0, z1, a1, z2, a2, z3, a3]
+  // We want a0 (input), a1 (h1 post-act), a2 (h2 post-act), a3 (output post-act)
+  const activationMaps = [];
+  // a0 is first
+  activationMaps.push(sampleData.layers[0].values);
+  // a1 is at index 2
+  if (sampleData.layers.length > 2) activationMaps.push(sampleData.layers[2].values);
+  // a2 is at index 4
+  if (sampleData.layers.length > 4) activationMaps.push(sampleData.layers[4].values);
+  // a3 is at index 6
+  if (sampleData.layers.length > 6) activationMaps.push(sampleData.layers[6].values);
+
+  layerGroups.forEach((layerGroup, li) => {
+    const activations = activationMaps[li] || [];
+    layerGroup.neurons.forEach((neuron, ni) => {
+      const a = activations[ni] || 0;
+      // Color: cool blue (0) → hot white/yellow (1)
+      const r = 0.08 + a * 0.85;
+      const g = 0.1 + a * 0.75;
+      const b = 0.5 - a * 0.35;
+      const color = new THREE.Color(r, g, b);
+      neuron.material.color.copy(color);
+      neuron.material.emissive.copy(color).multiplyScalar(0.6);
+      neuron.material.emissiveIntensity = 0.15 + a * 1.0;
+
+      // Scale output neurons by activation
+      if (li === LAYER_SIZES.length - 1) {
+        const baseScale = 0.7 + a * 0.6;
+        neuron.scale.setScalar(baseScale);
+      }
+    });
+  });
+
+  // Update UI
+  document.getElementById('sample-idx').textContent = sampleData.index;
+  document.getElementById('sample-label').textContent = sampleData.label;
+  const predSpan = document.getElementById('sample-pred');
+  predSpan.textContent = sampleData.prediction;
+  predSpan.className = sampleData.correct ? 'pred correct' : 'pred';
+
+  // Update digit preview canvas
+  const preview = document.getElementById('digit-preview');
+  if (preview && activationMaps[0]) {
+    const ctx = preview.getContext('2d');
+    const imgData = ctx.createImageData(28, 28);
+    for (let i = 0; i < 784; i++) {
+      const v = Math.round((activationMaps[0][i] || 0) * 255);
+      const pi = i * 4;
+      imgData.data[pi] = v;
+      imgData.data[pi + 1] = v;
+      imgData.data[pi + 2] = v;
+      imgData.data[pi + 3] = 255;
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+}
+
+// ──────────────────────────────────────────────────────────
+//  Load sample from networkData
+// ──────────────────────────────────────────────────────────
+function loadSample(idx) {
+  if (!networkData || !networkData.samples) return;
+  if (idx < 0 || idx >= networkData.samples.length) return;
+  currentSampleIdx = idx;
+  const sample = networkData.samples[idx];
+  updateActivations(sample);
+}
+
+// ──────────────────────────────────────────────────────────
+//  Main animation loop
+// ──────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const delta = Math.min(clock.getDelta(), 0.1);
+  controls.update();
+
+  // Update particle flows with current activations
+  if (networkData && networkData.samples) {
+    const sample = networkData.samples[currentSampleIdx];
+    if (sample && sample.layers) {
+      const acts = [];
+      if (sample.layers[0]) acts.push(sample.layers[0].values);       // a0
+      if (sample.layers[2]) acts.push(sample.layers[2].values);       // a1
+      if (sample.layers[4]) acts.push(sample.layers[4].values);       // a2
+      if (sample.layers[6]) acts.push(sample.layers[6].values);       // a3
+
+      for (let i = 0; i < particleSystems.length; i++) {
+        updateParticles(particleSystems[i], acts[i] || [], acts[i + 1] || [], delta);
+      }
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+
+// ──────────────────────────────────────────────────────────
+//  UI event handlers
+// ──────────────────────────────────────────────────────────
+function setupUI() {
+  document.getElementById('btn-prev').addEventListener('click', () => {
+    if (!networkData) return;
+    const idx = (currentSampleIdx - 1 + networkData.samples.length) % networkData.samples.length;
+    loadSample(idx);
+  });
+
+  document.getElementById('btn-next').addEventListener('click', () => {
+    if (!networkData) return;
+    const idx = (currentSampleIdx + 1) % networkData.samples.length;
+    loadSample(idx);
+  });
+
+  const btnPlay = document.getElementById('btn-play');
+  btnPlay.addEventListener('click', () => {
+    autoPlay = !autoPlay;
+    btnPlay.classList.toggle('active', autoPlay);
+    if (autoPlay) {
+      btnPlay.textContent = '⏸ Stop';
+      autoPlayTimer = setInterval(() => {
+        if (!networkData) return;
+        const idx = (currentSampleIdx + 1) % networkData.samples.length;
+        loadSample(idx);
+      }, 1200);
+    } else {
+      btnPlay.textContent = '▶▶ Auto';
+      if (autoPlayTimer) clearInterval(autoPlayTimer);
+    }
+  });
+
+  document.getElementById('btn-reset-cam').addEventListener('click', () => {
+    camera.position.set(30, 20, 45);
+    controls.target.set(15, 12, 18);
+    controls.update();
+  });
+
+  // Layer toggles
+  ['toggle-input', 'toggle-h1', 'toggle-h2', 'toggle-out'].forEach((id, i) => {
+    document.getElementById(id).addEventListener('change', (e) => {
+      if (layerGroups[i]) {
+        layerGroups[i].group.visible = e.target.checked;
+      }
+    });
+  });
+
+  // Flow speed
+  document.getElementById('speed').addEventListener('input', (e) => {
+    flowSpeed = parseInt(e.target.value) / 100;
+  });
+
+  // Keyboard controls
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') {
+      if (!networkData) return;
+      const idx = (currentSampleIdx - 1 + networkData.samples.length) % networkData.samples.length;
+      loadSample(idx);
+    } else if (e.key === 'ArrowRight') {
+      if (!networkData) return;
+      const idx = (currentSampleIdx + 1) % networkData.samples.length;
+      loadSample(idx);
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      document.getElementById('btn-play').click();
+    } else if (e.key === 'r' || e.key === 'R') {
+      document.getElementById('btn-reset-cam').click();
+    }
+  });
+}
+
+// ──────────────────────────────────────────────────────────
+//  Bootstrap
+// ──────────────────────────────────────────────────────────
+async function main() {
+  initScene();
+  buildNetwork();
+  setupUI();
+
+  // Load network data
+  try {
+    const resp = await fetch('network_data.json');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    networkData = await resp.json();
+    console.log(`Loaded ${networkData.samples.length} samples, accuracy: ${networkData.architecture.test_accuracy}`);
+
+    // Update UI
+    document.getElementById('sample-idx').textContent = '0';
+    if (networkData.samples.length > 0) {
+      loadSample(0);
+    }
+  } catch (err) {
+    console.error('Failed to load network_data.json:', err);
+    document.getElementById('sample-label').textContent = 'ERR';
+    document.getElementById('sample-pred').textContent = 'Run export_network.py first';
+  }
+
+  // Hide loading
+  document.getElementById('loading').classList.add('hidden');
+
+  // Start render loop
+  animate();
+}
+
+main();
+</script>
+</body>
+</html>
